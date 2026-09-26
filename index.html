@@ -524,7 +524,7 @@ faceEl.addEventListener('click', init);
 faceEl.addEventListener('touchstart', e=>{e.preventDefault();}, {passive:false});
 faceEl.addEventListener('touchend', e=>{e.preventDefault(); init();}, {passive:false});
 
-// ===== 成就榜 & 胜利提交 =====
+// ===== 成就榜 & 胜利提交 (纯前端版: localStorage, 无需服务器) =====
 const boardOverlay=document.getElementById('boardOverlay');
 const winOverlay=document.getElementById('winOverlay');
 const boardList=document.getElementById('boardList');
@@ -536,20 +536,25 @@ const winSubmit=document.getElementById('winSubmit');
 const winSkip=document.getElementById('winSkip');
 let currentTab='mid', pendingScore=null;
 
+const LB_KEY='minesweeper_leaderboard';   // localStorage 键
+const MAX_ENTRIES=10;                     // 每难度保留前 10
+
 function diffKey(){ return M>=99?'hard':(M>=40?'mid':'easy'); }
 
-// —— 共享积分榜（走 server，所有玩家共享）——
-async function api(path, method, body){
-  const opt={method, headers:{'Content-Type':'application/json'}};
-  if(body) opt.body=JSON.stringify(body);
-  const r=await fetch(path, opt);
-  if(!r.ok){ const t=await r.text(); throw new Error(t||('HTTP '+r.status)); }
-  return r.json();
+// —— 积分榜读写: localStorage {easy:[],mid:[],hard:[]}，每个条目 {name,time} ——
+function loadBoard(){
+  try{ return JSON.parse(localStorage.getItem(LB_KEY))||{easy:[],mid:[],hard:[]}; }
+  catch(e){ return {easy:[],mid:[],hard:[]}; }
+}
+function saveBoard(data){ try{ localStorage.setItem(LB_KEY, JSON.stringify(data)); }catch(e){} }
+
+function sortedRows(data, tab){
+  const list = (data && data[tab]) ? data[tab] : [];
+  return list.slice().sort((a,b)=> (a.time-b.time) || a.name.localeCompare(b.name)).slice(0,MAX_ENTRIES);
 }
 
 function renderBoard(data, tab){
-  const info=data[tab];
-  const rows=(info&&info.scores)||[];
+  const rows=sortedRows(data, tab);
   boardList.innerHTML='';
   if(rows.length===0){
     boardList.innerHTML='<div class="board-empty">这个难度还没有成绩，快来抢占第一！🏁</div>';
@@ -568,14 +573,9 @@ function renderBoard(data, tab){
   });
 }
 
-async function refreshBoard(){
-  try{
-    const data=await api('api/leaderboard','GET');
-    renderBoard(data, currentTab);
-    boardStatus.textContent='所有玩家共享 · 实时更新';
-  }catch(e){
-    boardStatus.textContent='读取榜单失败：'+(e.message||'请通过服务器访问');
-  }
+function refreshBoard(){
+  renderBoard(loadBoard(), currentTab);
+  boardStatus.textContent='本机最高分 · 自动保存';
 }
 
 function openBoard(){
@@ -601,7 +601,7 @@ boardTabs.addEventListener('touchend', e=>{
   e.preventDefault();
   const t=e.changedTouches[0];
   const btn=document.elementFromPoint(t.clientX,t.clientY)?.closest('button');
-  if(btn && btn.closest('#boardTabs')) btn.click();  // 在真实按钮上触发展开事件
+  if(btn && btn.closest('#boardTabs')) btn.click();
 }, {passive:false});
 boardOverlay.addEventListener('click', e=>{ if(e.target===boardOverlay) closeBoard(); });
 winOverlay.addEventListener('click', e=>{ if(e.target===winOverlay) return; }); // 胜利弹窗不可点背景关闭
@@ -615,18 +615,19 @@ function showWin(timeS){
 }
 function hideWin(){ winOverlay.hidden=true; pendingScore=null; winName.blur(); }
 
-async function submitScore(){
+function submitScore(){
   const name=(winName.value.trim()||'匿名').slice(0,20);
   if(pendingScore==null) return;
   const diff=diffKey();
-  try{
-    const data=await api('api/leaderboard','POST',{name, time:pendingScore, difficulty:diff});
-    hideWin();
-    currentTab=diff; openBoard();
-  }catch(e){
-    winSkip.textContent='提交失败，点击重试';
-    setTimeout(()=>{ winSkip.textContent='跳过，不要上榜'; }, 2000);
-  }
+  // 写入 localStorage
+  const data=loadBoard();
+  if(!data[diff]) data[diff]=[];
+  data[diff].push({name, time:pendingScore});
+  // 排序 + 截断
+  data[diff] = sortedRows(data, diff);
+  saveBoard(data);
+  hideWin();
+  currentTab=diff; openBoard();
 }
 winSubmit.addEventListener('click', submitScore);
 winSubmit.addEventListener('touchend', e=>{e.preventDefault(); submitScore();}, {passive:false});
